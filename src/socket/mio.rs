@@ -15,12 +15,15 @@ impl Socket {
         let socket = Socket2::new(domain, type_, Some(protocol))?;
         socket.set_nonblocking(true)?;
 
-        Ok(Self { socket: socket })
+        Ok(Self { socket })
     }
 
-    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.socket.set_ttl(ttl)?;
-        self.socket.set_unicast_hops_v6(ttl)?;
+    pub fn set_ttl(&self, ttl: u32, ipver: u8) -> io::Result<()> {
+        match ipver {
+            4 => self.socket.set_ttl(ttl)?,
+            6 => self.socket.set_unicast_hops_v6(ttl)?,
+            _ => unreachable!()
+        }
         Ok(())
     }
 

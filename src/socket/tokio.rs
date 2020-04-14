@@ -28,8 +28,8 @@ impl Socket {
         })
     }
 
-    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.socket.get_ref().set_ttl(ttl)?;
+    pub fn set_ttl(&self, ttl: u32, ipver: u8) -> io::Result<()> {
+        self.socket.get_ref().set_ttl(ttl, ipver)?;
         Ok(())
     }
 

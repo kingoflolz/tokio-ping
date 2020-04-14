@@ -290,12 +290,12 @@ impl Sockets {
 
     fn set_ttl(&self, ttl: u32)-> io::Result<()> {
         match self {
-            Sockets::V4(v4) => v4.set_ttl(ttl)?,
+            Sockets::V4(v4) => v4.set_ttl(ttl, 4)?,
             Sockets::Both {  v4, v6 } => {
-                v4.set_ttl(ttl)?;
-                v6.set_ttl(ttl)?;
+                v4.set_ttl(ttl, 4)?;
+                v6.set_ttl(ttl, 6)?;
             },
-            Sockets::V6(v6) => v6.set_ttl(ttl)?,
+            Sockets::V6(v6) => v6.set_ttl(ttl, 6)?,
         };
         Ok(())
     }
