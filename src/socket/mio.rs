@@ -20,7 +20,7 @@ impl Socket {
 
     pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
         self.socket.set_ttl(ttl)?;
-
+        self.socket.set_unicast_hops_v6(ttl)?;
         Ok(())
     }
 
