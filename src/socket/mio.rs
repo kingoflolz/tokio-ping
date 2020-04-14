@@ -18,6 +18,12 @@ impl Socket {
         Ok(Self { socket: socket })
     }
 
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.socket.set_ttl(ttl)?;
+
+        Ok(())
+    }
+
     pub fn send_to(&self, buf: &[u8], target: &SockAddr) -> io::Result<usize> {
         self.socket.send_to(buf, target)
     }

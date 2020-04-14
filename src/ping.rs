@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use futures::{Async, Future, Poll, Stream};
-use futures::sync::oneshot;
+use futures::sync::{oneshot, mpsc};
 use rand::random;
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Type};
@@ -248,6 +248,7 @@ struct PingInner {
     state: PingState,
     _v4_finalize: Option<oneshot::Sender<()>>,
     _v6_finalize: Option<oneshot::Sender<()>>,
+    error_receiver: Mutex<Option<mpsc::Receiver<Error>>>
 }
 
 enum Sockets {
@@ -286,6 +287,18 @@ impl Sockets {
             Sockets::V6(ref socket) => Some(socket),
         }
     }
+
+    fn set_ttl(&self, ttl: u32)-> io::Result<()> {
+        match self {
+            Sockets::V4(v4) => v4.set_ttl(ttl)?,
+            Sockets::Both {  v4, v6 } => {
+                v4.set_ttl(ttl)?;
+                v6.set_ttl(ttl)?;
+            },
+            Sockets::V6(v6) => v6.set_ttl(ttl)?,
+        };
+        Ok(())
+    }
 }
 
 impl Pinger {
@@ -294,7 +307,16 @@ impl Pinger {
         ::futures::future::lazy(||
             Self::with_handle(&Handle::default()).map_err(From::from)
         )
+    }
 
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.inner.sockets.set_ttl(ttl)?;
+        Ok(())
+    }
+
+    pub fn get_errors(&self) -> Option<mpsc::Receiver<Error>> {
+        let mut rec = self.inner.error_receiver.lock();
+        rec.take()
     }
 
     fn with_handle(handle: &Handle) -> io::Result<Self> {
@@ -302,10 +324,13 @@ impl Pinger {
 
         let state = PingState::new();
 
+        // errors delivered on best effort basis
+        let (error_sender, error_receiver) = mpsc::channel(10);
+
         let v4_finalize = if let Some(v4_socket) = sockets.v4() {
             let (s, r) = oneshot::channel();
             let receiver =
-                Receiver::<IcmpV4>::new(v4_socket.clone(), state.clone());
+                Receiver::<IcmpV4>::new(v4_socket.clone(), state.clone(), error_sender.clone());
             spawn(receiver.select(r.map_err(|_| ())).then(|_| Ok(())));
             Some(s)
         } else {
@@ -315,7 +340,7 @@ impl Pinger {
         let v6_finalize = if let Some(v6_socket) = sockets.v6() {
             let (s, r) = oneshot::channel();
             let receiver =
-                Receiver::<IcmpV6>::new(v6_socket.clone(), state.clone());
+                Receiver::<IcmpV6>::new(v6_socket.clone(), state.clone(), error_sender.clone());
             spawn(receiver.select(r.map_err(|_| ())).then(|_| Ok(())));
             Some(s)
         } else {
@@ -323,10 +348,11 @@ impl Pinger {
         };
 
         let inner = PingInner {
-            sockets: sockets,
-            state: state,
+            sockets,
+            state,
             _v4_finalize: v4_finalize,
             _v6_finalize: v6_finalize,
+            error_receiver: Mutex::new(Some(error_receiver))
         };
 
         Ok(Self {
@@ -412,43 +438,42 @@ struct Receiver<Message> {
     socket: Socket,
     state: PingState,
     buffer: [u8; 2048],
+    error_sender: mpsc::Sender<Error>,
     _phantom: ::std::marker::PhantomData<Message>,
 }
 
 trait ParseReply {
-    fn reply_payload(data: &[u8]) -> Option<&[u8]>;
+    fn reply_payload(data: &[u8]) -> Result<Option<&[u8]>, Error>;
 }
 
 impl ParseReply for IcmpV4 {
-    fn reply_payload(data: &[u8]) -> Option<&[u8]> {
+    fn reply_payload(data: &[u8]) -> Result<Option<&[u8]>, Error> {
         if let Ok(ipv4_packet) = IpV4Packet::decode(data) {
             if ipv4_packet.protocol != IpV4Protocol::Icmp {
-                return None;
+                return Ok(None);
             }
 
-            if let Ok(reply) = EchoReply::decode::<IcmpV4>(ipv4_packet.data) {
-                return Some(reply.payload);
-            }
+            let reply = EchoReply::decode::<IcmpV4>(ipv4_packet.data)?;
+            return Ok(Some(reply.payload));
         }
-        None
+        Ok(None)
     }
 }
 
 impl ParseReply for IcmpV6 {
-    fn reply_payload(data: &[u8]) -> Option<&[u8]> {
-        if let Ok(reply) = EchoReply::decode::<IcmpV6>(data) {
-            return Some(reply.payload);
-        }
-        None
+    fn reply_payload(data: &[u8]) -> Result<Option<&[u8]>, Error> {
+        let reply = EchoReply::decode::<IcmpV6>(data)?;
+        return Ok(Some(reply.payload));
     }
 }
 
 impl<Proto> Receiver<Proto> {
-    fn new(socket: Socket, state: PingState) -> Self {
+    fn new(socket: Socket, state: PingState, error_sender: mpsc::Sender<Error>) -> Self {
         Self {
-            socket: socket,
-            state: state,
+            socket,
+            state,
             buffer: [0; 2048],
+            error_sender: error_sender,
             _phantom: ::std::marker::PhantomData,
         }
     }
@@ -461,11 +486,15 @@ impl<Message: ParseReply> Future for Receiver<Message> {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.socket.recv(&mut self.buffer) {
             Ok(Async::Ready(bytes)) => {
-                if let Some(payload) = Message::reply_payload(&self.buffer[..bytes]) {
+                let payload = Message::reply_payload(&self.buffer[..bytes]);
+                if let Ok(Some(payload)) = payload {
                     let now = Instant::now();
                     if let Some(sender) = self.state.remove(payload) {
                         sender.send(now).unwrap_or_default()
                     }
+                }
+                if let Err(e) = payload {
+                    let _ = self.error_sender.try_send(e);
                 }
                 self.poll()
             }

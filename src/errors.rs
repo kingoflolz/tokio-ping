@@ -4,11 +4,11 @@ use failure::{Fail, Context, Backtrace};
 
 #[derive(Debug)]
 pub struct Error {
-    inner: Context<ErrorKind>
+    pub (crate) inner: Context<ErrorKind>
 }
 
 impl Fail for Error {
-    fn cause(&self) -> Option<&Fail> {
+    fn cause(&self) -> Option<&dyn Fail> {
         self.inner.cause()
     }
 
@@ -45,6 +45,16 @@ impl From<::std::io::Error> for Error {
     }
 }
 
+impl From<::packet::Error> for Error {
+    fn from(error: ::packet::Error) -> Self {
+        Error {
+            inner: Context::new(ErrorKind::PacketError {
+                error
+            })
+        }
+    }
+}
+
 #[derive(Debug, Fail)]
 pub enum ErrorKind {
     #[fail(display = "invalid procotol")]
@@ -54,5 +64,9 @@ pub enum ErrorKind {
     #[fail(display = "io error: {}", error)]
     IoError {
         error: ::std::io::Error
-    }
+    },
+    #[fail(display = "packet error: {}", error)]
+    PacketError {
+        error: ::packet::Error
+    },
 }

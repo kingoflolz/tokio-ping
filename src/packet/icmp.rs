@@ -8,6 +8,8 @@ pub enum Error {
     InvalidSize,
     #[fail(display = "invalid packet")]
     InvalidPacket,
+    #[fail(display = "hop limit/TTL exceeded")]
+    TTLExceeded,
 }
 
 pub struct IcmpV4;
@@ -18,6 +20,8 @@ pub trait Proto {
     const ECHO_REQUEST_CODE: u8;
     const ECHO_REPLY_TYPE: u8;
     const ECHO_REPLY_CODE: u8;
+    const TIME_EXCEEDED_REPLY_TYPE: u8;
+    const TTL_EXCEEDED_REPLY_CODE: u8;
 }
 
 impl Proto for IcmpV4 {
@@ -25,6 +29,8 @@ impl Proto for IcmpV4 {
     const ECHO_REQUEST_CODE: u8 = 0;
     const ECHO_REPLY_TYPE: u8 = 0;
     const ECHO_REPLY_CODE: u8 = 0;
+    const TIME_EXCEEDED_REPLY_TYPE: u8 = 11;
+    const TTL_EXCEEDED_REPLY_CODE: u8 = 0;
 }
 
 impl Proto for IcmpV6 {
@@ -32,6 +38,8 @@ impl Proto for IcmpV6 {
     const ECHO_REQUEST_CODE: u8 = 0;
     const ECHO_REPLY_TYPE: u8 = 129;
     const ECHO_REPLY_CODE: u8 = 0;
+    const TIME_EXCEEDED_REPLY_TYPE: u8 = 3;
+    const TTL_EXCEEDED_REPLY_CODE: u8 = 0;
 }
 
 pub struct EchoRequest<'a> {
@@ -73,6 +81,9 @@ impl<'a> EchoReply<'a> {
 
         let type_ = buffer[0];
         let code = buffer[1];
+        if type_ == P::TIME_EXCEEDED_REPLY_TYPE && code == P::TTL_EXCEEDED_REPLY_CODE {
+            return Err(Error::TTLExceeded)
+        }
         if type_ != P::ECHO_REPLY_TYPE && code != P::ECHO_REPLY_CODE {
             return Err(Error::InvalidPacket)
         }

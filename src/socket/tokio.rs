@@ -28,6 +28,11 @@ impl Socket {
         })
     }
 
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.socket.get_ref().set_ttl(ttl)?;
+        Ok(())
+    }
+
     pub fn send_to<T>(&self, buf: T, target: &SocketAddr) -> Send<T>
     where
         T: AsRef<[u8]>,
